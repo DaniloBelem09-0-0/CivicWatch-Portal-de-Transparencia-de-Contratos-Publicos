@@ -17,6 +17,7 @@ namespace CivicWatch.Api.Models
         public string? Detalhes { get; set; }
 
         public int UserId { get; set; }
-        public required User User { get; set; }
+        // CORREÇÃO: Remova 'required' daqui. O EF Core fará a associação via UserId.
+        public User User { get; set; } 
     }
 }

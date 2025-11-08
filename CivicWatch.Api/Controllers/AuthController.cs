@@ -21,7 +21,7 @@ namespace CivicWatch.Api.Controllers
         public async Task<ActionResult> Login([FromBody] LoginDto login)
         {
             // Substitua 'password' pelo hashing real após implementar o Seeder
-            var user = await _authService.AuthenticateAsync(login.Username, "senha_nao_hash"); 
+            var user = await _authService.AuthenticateAsync(login.Username, login.Password); 
 
             if (user == null)
             {

@@ -16,6 +16,6 @@ namespace CivicWatch.Api.Models
         // Chave Estrangeira 1:1
         [ForeignKey("User")]
         public int UserId { get; set; }
-        public required User User { get; set; }
+        public User? User { get; set; }
     }
 }

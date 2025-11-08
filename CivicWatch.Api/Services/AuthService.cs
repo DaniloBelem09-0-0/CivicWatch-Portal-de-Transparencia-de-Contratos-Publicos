@@ -19,15 +19,28 @@ namespace CivicWatch.Api.Services
             _config = config;
         }
 
-        public async Task<User?> AuthenticateAsync(string username, string password)
+       public async Task<User?> AuthenticateAsync(string username, string password)
         {
             var user = await _context.Users
-                .Include(u => u.Role)
+                .Include(u => u.Role) 
                 .SingleOrDefaultAsync(u => u.Username == username);
 
-            if (user == null) return null;
-            // Lógica de Hashing de Senha deve ser implementada aqui
-            return user;
+            if (user == null) return null; // Usuário não encontrado
+
+            // VERIFICAÇÃO CRÍTICA: Se o hash/salt estiverem nulos (o que indica um erro no Seeder ou na Migração)
+            if (user.PasswordHash == null || user.PasswordSalt == null)
+            {
+                // Isso pode ser uma falha grave, mas impedirá o 401 por nulo.
+                return null; 
+            }
+
+            // CHAMA A FUNÇÃO DE VERIFICAÇÃO CORRETA
+            if (!PasswordHasher.VerifyPasswordHash(password, user.PasswordHash, user.PasswordSalt))
+            {
+                return null; // Senha incorreta (401)
+            }
+
+            return user; // Autenticação bem-sucedida
         }
 
         public async Task<string> GenerateJwtToken(User user)

@@ -17,10 +17,12 @@ namespace CivicWatch.Api.Models
 
         // FK do Alerta
         public int AlertaId { get; set; }
-        public required Alerta Alerta { get; set; }
+        // CORREÇÃO: Removemos 'required'. O EF Core cuidará da associação.
+        public Alerta? Alerta { get; set; } 
 
         // FK do Usuário
         public int UserId { get; set; }
-        public required User User { get; set; }
+        // CORREÇÃO: Removemos 'required'. O EF Core cuidará da associação.
+        public User? User { get; set; } 
     }
 }
