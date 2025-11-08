@@ -1,0 +1,42 @@
+# Arquivos de Build e Binários
+[Bb]in/
+[Oo]bj/
+*.dll
+*.exe
+*.pdb
+*.suo
+
+# Cache e Restauração de Pacotes
+# Ignora pacotes NuGet e pastas de cache temporário
+*.nupkg
+packages/
+
+# Arquivos de Teste e Cobertura de Código
+*.trx
+*.coverage
+*.vspscc
+
+# Arquivos de Configuração do Ambiente e Usuário
+# Ignora pastas de cache do Visual Studio (VS) e VS Code
+.vs/
+.vscode/
+*.user
+
+# Secrets e Arquivos Sensíveis
+# Arquivos de configurações de ambiente (dev/prod) que podem conter credenciais
+appsettings.Development.json
+appsettings.Production.json
+appsettings.json
+# Arquivos de certificados
+*.pfx
+
+# Entity Framework Core (Cache de Ferramentas)
+# Mantemos a pasta Migrations/, mas ignoramos o cache
+ef.lock
+
+# Trecho do .gitignore
+# Secrets e Arquivos Sensíveis
+# Arquivos de configurações de ambiente que contêm credenciais reais
+appsettings.Development.json
+# Arquivos de secrets de usuário
+*.usersecrets
