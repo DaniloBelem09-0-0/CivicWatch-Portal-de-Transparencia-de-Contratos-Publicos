@@ -1,5 +1,6 @@
 using CivicWatch.Api.Data;
 using CivicWatch.Api.Models;
+using CivicWatch.Api.DTOs; // NOVO: Para o DTO de Registro
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -19,30 +20,72 @@ namespace CivicWatch.Api.Services
             _config = config;
         }
 
-       public async Task<User?> AuthenticateAsync(string username, string password)
+        // --- Método de Autenticação (Login) ---
+        public async Task<User?> AuthenticateAsync(string username, string password)
         {
             var user = await _context.Users
                 .Include(u => u.Role) 
                 .SingleOrDefaultAsync(u => u.Username == username);
 
-            if (user == null) return null; // Usuário não encontrado
+            if (user == null) return null;
 
-            // VERIFICAÇÃO CRÍTICA: Se o hash/salt estiverem nulos (o que indica um erro no Seeder ou na Migração)
             if (user.PasswordHash == null || user.PasswordSalt == null)
             {
-                // Isso pode ser uma falha grave, mas impedirá o 401 por nulo.
                 return null; 
             }
 
-            // CHAMA A FUNÇÃO DE VERIFICAÇÃO CORRETA
             if (!PasswordHasher.VerifyPasswordHash(password, user.PasswordHash, user.PasswordSalt))
             {
-                return null; // Senha incorreta (401)
+                return null;
             }
 
-            return user; // Autenticação bem-sucedida
+            return user;
+        }
+        
+        // --- NOVO MÉTODO: Registro de Usuário Comum (Cidadão) ---
+        public async Task<User> RegisterAsync(RegisterDto dto)
+        {
+            // 1. Verificação de Usuário Existente
+            if (await _context.Users.AnyAsync(u => u.Username == dto.Username))
+            {
+                throw new InvalidOperationException("Nome de usuário já existe.");
+            }
+            
+            // 2. Buscar a Role "Cidadão"
+            var cidadaoRole = await _context.Roles
+                .FirstOrDefaultAsync(r => r.Nome == "Cidadão");
+            
+            if (cidadaoRole == null)
+            {
+                throw new InvalidOperationException("A Role 'Cidadão' não foi encontrada. Execute o Seeder.");
+            }
+
+            // 3. Criar Hash da Senha
+            PasswordHasher.CreatePasswordHash(dto.Password, out byte[] hash, out byte[] salt);
+
+            // 4. Criar as Entidades (User e UserProfile)
+            var newUser = new User
+            {
+                Username = dto.Username,
+                PasswordHash = hash,
+                PasswordSalt = salt,
+                RoleId = cidadaoRole.Id,
+                Role = cidadaoRole,
+                UserProfile = new UserProfile 
+                {
+                    NomeCompleto = dto.NomeCompleto,
+                    Email = dto.Email
+                    // Outros campos 'required' do UserProfile devem ser preenchidos aqui
+                }
+            };
+
+            _context.Users.Add(newUser);
+            await _context.SaveChangesAsync();
+            
+            return newUser;
         }
 
+        // --- Método de Geração de Token ---
         public async Task<string> GenerateJwtToken(User user)
         {
             var claims = new List<Claim>

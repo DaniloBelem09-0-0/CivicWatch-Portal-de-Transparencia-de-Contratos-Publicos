@@ -12,7 +12,9 @@ namespace CivicWatch.Api.Models
         // Chave Estrangeira 1:1
         [ForeignKey("Fornecedor")]
         public int FornecedorId { get; set; }
-        public required Fornecedor Fornecedor { get; set; }
+        
+        // CORREÇÃO: Remova 'required'. O EF Core fará a associação usando a FK (FornecedorId).
+        public Fornecedor Fornecedor { get; set; } 
 
         public DateTime DataUltimaVerificacao { get; set; } = DateTime.UtcNow;
 
