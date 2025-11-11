@@ -4,9 +4,10 @@ namespace CivicWatch.Api.DTOs
 {
     public class LoginDto
     {
-        [Required]
-        public string Username { get; set; } = string.Empty;
-        [Required]
-        public string Password { get; set; } = string.Empty;
+        [Required(ErrorMessage = "O nome de usuário é obrigatório.")]
+         public required string Username { get; set; }
+
+        [Required(ErrorMessage = "A senha é obrigatória.")]
+        public required string Password { get; set; }
     }
 }

@@ -3,8 +3,11 @@ using CivicWatch.Api.Data;
 using CivicWatch.Api.Services; 
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models; // Necessário para OpenApi (Swagger)
+using Microsoft.OpenApi.Models; 
 using System.Text;
+using System.Net.Http.Headers;
+using System;
+using System.Collections.Generic; // Para a lista de string no Swagger
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,26 +32,44 @@ builder.Services.AddCors(options =>
 });
 
 // 1.3 Registro dos Controllers e Swagger/OpenAPI
-
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// CORREÇÃO FINAL: Configuração do Swagger para usar Bearer Token (JWT)
+// CORREÇÃO: Registro de TODOS os serviços na seção correta
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IAlertaService, AlertaService>(); 
+builder.Services.AddScoped<IFornecedorService, FornecedorService>(); 
+builder.Services.AddScoped<ITransparenciaService, TransparenciaService>(); 
+
+// Configuração do Cliente HTTP para API Externa
+builder.Services.AddHttpClient("PortalTransparenciaClient", client =>
+{
+    var token = builder.Configuration["ApiKeys:PortalTransparenciaToken"];
+    
+    client.BaseAddress = new Uri("https://api.portaldatransparencia.gov.br/");
+
+    // Adiciona o cabeçalho 'chave-api-dados'
+    client.DefaultRequestHeaders.Add("chave-api-dados", token); 
+    
+    client.DefaultRequestHeaders.Accept.Clear();
+    client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+});
+
+
+// Configuração do Swagger para usar Bearer Token (JWT)
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "CivicWatch API", Version = "v1" });
 
-    // Define o esquema de segurança Bearer
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "Insira o token JWT no campo 'Value' (Ex: Bearer {token})",
         Name = "Authorization",
         In = ParameterLocation.Header,
         Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer" // CRÍTICO: Indica o tipo de esquema
+        Scheme = "Bearer"
     });
 
-    // Aplica o requisito de segurança a todos os endpoints
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -60,16 +81,12 @@ builder.Services.AddSwaggerGen(c =>
                     Id = "Bearer"
                 }
             },
-            new List<string>() // Escopos de autorização (vazio para JWT simples)
+            new List<string>()
         }
     });
 });
 
-// 1.4 Registro dos Services
-builder.Services.AddScoped<IAuthService, AuthService>();
-builder.Services.AddScoped<IAlertaService, AlertaService>(); 
-
-// 1.5 Configuração do JWT Authentication (Configuração de Validação do Token)
+// 1.5 Configuração do JWT Authentication
 var jwtKey = builder.Configuration["Jwt:Key"] 
              ?? throw new InvalidOperationException("Chave JWT não configurada.");
 

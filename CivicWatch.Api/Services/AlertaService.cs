@@ -2,6 +2,8 @@ using CivicWatch.Api.Data;
 using CivicWatch.Api.Models;
 using CivicWatch.Api.DTOs;
 using Microsoft.EntityFrameworkCore;
+using System.Collections.Generic;
+using System.Linq; // Adicionado para IQueryable
 
 namespace CivicWatch.Api.Services
 {
@@ -13,6 +15,10 @@ namespace CivicWatch.Api.Services
         {
             _context = context;
         }
+
+        // =========================================================================
+        // MÉTODOS DE CRIAÇÃO E CONSULTA DE REGRAS (CRUD Regras)
+        // =========================================================================
 
         public async Task<RegraAlerta> CreateRegraAsync(RegraAlertaDto dto)
         {
@@ -27,8 +33,76 @@ namespace CivicWatch.Api.Services
             await _context.SaveChangesAsync();
             return regra;
         }
+        
+        // NOVO: Consultar Detalhe da Regra (GET /regras/{id})
+        public async Task<RegraAlertaDto> GetRegraByIdAsync(int id)
+        {
+            var regra = await _context.RegrasAlerta
+                .Where(r => r.Id == id)
+                .Select(r => new RegraAlertaDto 
+                {
+                    Nome = r.Nome,
+                    DescricaoLogica = r.DescricaoLogica,
+                    Ativa = r.Ativa,
+                    TipoEntidadeAfetada = r.TipoEntidadeAfetada
+                })
+                .FirstOrDefaultAsync();
 
-        // Simplificado para o MVP: Retorna todos os alertas que não estão Fechados (StatusId != 3)
+            if (regra == null)
+            {
+                throw new KeyNotFoundException($"Regra de Alerta com ID {id} não encontrada.");
+            }
+            return regra;
+        }
+
+        // NOVO: Atualizar Regra (PUT /regras/{id})
+        public async Task UpdateRegraAsync(int id, RegraAlertaDto dto)
+        {
+            var regra = await _context.RegrasAlerta.FindAsync(id);
+            if (regra == null)
+            {
+                throw new KeyNotFoundException($"Regra de Alerta com ID {id} não encontrada.");
+            }
+
+            regra.Nome = dto.Nome;
+            regra.DescricaoLogica = dto.DescricaoLogica;
+            regra.Ativa = dto.Ativa;
+            regra.TipoEntidadeAfetada = dto.TipoEntidadeAfetada;
+
+            await _context.SaveChangesAsync();
+        }
+
+        // NOVO: Excluir Regra (DELETE /regras/{id})
+        public async Task DeleteRegraAsync(int id)
+        {
+            var regra = await _context.RegrasAlerta.FindAsync(id);
+            if (regra == null)
+            {
+                throw new KeyNotFoundException($"Regra de Alerta com ID {id} não encontrada.");
+            }
+
+            _context.RegrasAlerta.Remove(regra);
+            await _context.SaveChangesAsync();
+        }
+
+        // NOVO: Listar Todas as Regras (GET /regras)
+        public async Task<IEnumerable<RegraAlertaDto>> GetRegrasAsync()
+        {
+             return await _context.RegrasAlerta
+                .Select(r => new RegraAlertaDto 
+                {
+                    Nome = r.Nome,
+                    DescricaoLogica = r.DescricaoLogica,
+                    Ativa = r.Ativa,
+                    TipoEntidadeAfetada = r.TipoEntidadeAfetada
+                })
+                .ToListAsync();
+        }
+
+        // =========================================================================
+        // MÉTODOS DO WORKFLOW DE ALERTA (Existentes)
+        // =========================================================================
+
         public async Task<IEnumerable<AlertaResponseDto>> GetAlertasPendentesAsync()
         {
             var alertas = await _context.Alertas
@@ -78,10 +152,10 @@ namespace CivicWatch.Api.Services
             // 1. Atualiza o status para Fechado (ID 3)
             alerta.StatusAlertaId = 3; 
 
-            // 2. Opcional: Adicionar LogAuditoria
+            // 2. Adicionar LogAuditoria
             _context.LogsAuditoria.Add(new LogAuditoria 
             { 
-                UserId = userId, // EF Core usa esta FK para criar o log
+                UserId = userId,
                 Acao = $"ALERTA_FECHADO_AUDITOR",
                 Detalhes = $"Alerta {alertaId} fechado. Justificativa: {justificado}"
             });

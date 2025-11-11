@@ -22,10 +22,10 @@ namespace CivicWatch.Api.Models
 
         // Chaves Estrangeiras N:1
         public int OrgaoPublicoId { get; set; }
-        public required OrgaoPublico OrgaoPublico { get; set; }
+        public OrgaoPublico? OrgaoPublico { get; set; }
 
         public int FornecedorId { get; set; }
-        public required Fornecedor Fornecedor { get; set; }
+        public Fornecedor? Fornecedor { get; set; }
 
         public ICollection<ItemContrato> Itens { get; set; } = new List<ItemContrato>();
     }
