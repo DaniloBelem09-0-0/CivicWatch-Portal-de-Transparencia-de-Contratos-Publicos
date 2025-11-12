@@ -7,5 +7,7 @@ namespace CivicWatch.Api.Services
         Task<IEnumerable<ContratoResponseDto>> GetContratosAsync();
         // A importação será simulada
         Task SimulateDataImportAsync();
+        
+        Task CheckSupplierComplianceAsync(); 
     }
 }

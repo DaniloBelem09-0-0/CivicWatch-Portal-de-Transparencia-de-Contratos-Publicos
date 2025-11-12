@@ -16,7 +16,6 @@ namespace CivicWatch.Api.Controllers
             _transparenciaService = transparenciaService;
         }
 
-        // GET: api/transparencia/contratos (PÚBLICO)
         [HttpGet("contratos")]
         [AllowAnonymous]
         public async Task<ActionResult<IEnumerable<ContratoResponseDto>>> GetContratos()
@@ -25,7 +24,6 @@ namespace CivicWatch.Api.Controllers
             return Ok(contratos);
         }
 
-        // POST: api/transparencia/importar (PROTEGIDO)
         [HttpPost("importar")]
         [Authorize(Roles = "Administrador")]
         public async Task<ActionResult> ImportarDados()
@@ -34,6 +32,13 @@ namespace CivicWatch.Api.Controllers
             return Ok("Simulação de importação iniciada e logada com sucesso.");
         }
         
-        // FALTANTE: Adicionar um GET para despesas também.
+        [HttpPost("auditar")]
+        [Authorize(Roles = "Auditor, Administrador")]
+        public async Task<ActionResult> AuditarCompliance()
+        {
+            await _transparenciaService.CheckSupplierComplianceAsync();
+            
+            return Ok("Auditoria de Compliance (CEIS/CNEP) disparada com sucesso. Verifique o Log de Auditoria para resultados.");
+        }
     }
 }
