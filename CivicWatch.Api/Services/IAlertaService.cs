@@ -8,9 +8,9 @@ namespace CivicWatch.Api.Services
         // CRUD de RegraAlerta (Auditor)
         Task<RegraAlerta> CreateRegraAsync(RegraAlertaDto dto);
         
-        // NOVO: Listar Todas as Regras (Corrigindo o CS1061)
-        Task<IEnumerable<RegraAlertaDto>> GetRegrasAsync(); 
-
+        // NOVO: Método simples para uso interno (Trigger de valor/sanção)
+        Task CreateAlertaSimplesAsync(int regraId, string descricao); 
+        
         // Consulta de Alertas (Auditor/Gestor)
         Task<IEnumerable<AlertaResponseDto>> GetAlertasPendentesAsync();
 
@@ -24,5 +24,8 @@ namespace CivicWatch.Api.Services
         Task<RegraAlertaDto> GetRegraByIdAsync(int id); 
         Task UpdateRegraAsync(int id, RegraAlertaDto dto);
         Task DeleteRegraAsync(int id);
+        
+        // NOVO: Listar Todas as Regras (Para endpoint GET /alerta/regras)
+        Task<IEnumerable<RegraAlertaDto>> GetRegrasAsync(); 
     }
 }

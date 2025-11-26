@@ -1,0 +1,142 @@
+@startuml
+
+!theme plain
+top to bottom direction
+skinparam linetype ortho
+
+class Alertas {
+   DataGeracao: datetime2
+   DescricaoOcorrencia: nvarchar(max)
+   RegraAlertaId: int
+   StatusAlertaId: int
+   EntidadeRelacionadaId: int
+   TipoEntidadeRelacionada: nvarchar(max)
+   Id: int
+}
+class ChecksIntegridade {
+   FornecedorId: int
+   DataUltimaVerificacao: datetime2
+   StatusReceitaWs: nvarchar(50)
+   EmConformidade: bit
+   Id: int
+}
+class Contratos {
+   NumeroContrato: nvarchar(100)
+   ValorTotal: decimal(18,2)
+   DataInicio: datetime2
+   DataFim: datetime2
+   OrgaoPublicoId: int
+   FornecedorId: int
+   Id: int
+}
+class Denuncias {
+   DataDenuncia: datetime2
+   Conteudo: nvarchar(max)
+   UserId: int
+   AlertaId: int
+   Id: int
+}
+class Despesas {
+   NumeroEmpenho: nvarchar(100)
+   DataPagamento: datetime2
+   ValorPago: decimal(18,2)
+   OrgaoPublicoId: int
+   FornecedorId: int
+   Id: int
+}
+class FontesDadosPublica {
+   Nome: nvarchar(100)
+   UrlBase: nvarchar(max)
+   UltimaSincronizacao: datetime2
+   Status: nvarchar(50)
+   Id: int
+}
+class Fornecedores {
+   Documento: nvarchar(18)
+   RazaoSocial: nvarchar(255)
+   StatusReceita: nvarchar(50)
+   Id: int
+}
+class ItensContrato {
+   Descricao: nvarchar(max)
+   Quantidade: int
+   ValorUnitario: decimal(18,2)
+   ContratoId: int
+   Id: int
+}
+class ItensDespesa {
+   Descricao: nvarchar(max)
+   ValorDespesa: decimal(18,2)
+   DespesaId: int
+   Id: int
+}
+class LogsAuditoria {
+   DataAcao: datetime2
+   Acao: nvarchar(max)
+   Detalhes: nvarchar(max)
+   UserId: int
+   Id: int
+}
+class OrgaosPublicos {
+   Nome: nvarchar(200)
+   CNPJ: nvarchar(14)
+   Id: int
+}
+class RegrasAlerta {
+   Nome: nvarchar(100)
+   DescricaoLogica: nvarchar(max)
+   Ativa: bit
+   TipoEntidadeAfetada: nvarchar(max)
+   Id: int
+}
+class RespostasAlerta {
+   DataResposta: datetime2
+   Justificativa: nvarchar(max)
+   AlertaId: int
+   UserId: int
+   Id: int
+}
+class Roles {
+   Nome: nvarchar(50)
+   Id: int
+}
+class StatusAlertas {
+   Nome: nvarchar(50)
+   CorHex: nvarchar(10)
+   Id: int
+}
+class UserProfiles {
+   NomeCompleto: nvarchar(150)
+   Email: nvarchar(100)
+   UserId: int
+   Id: int
+}
+class Users {
+   Username: nvarchar(100)
+   PasswordHash: varbinary(max)
+   PasswordSalt: varbinary(max)
+   RoleId: int
+   Id: int
+}
+class __EFMigrationsHistory {
+   ProductVersion: nvarchar(32)
+   MigrationId: nvarchar(150)
+}
+
+Alertas                -[#595959,plain]-^  RegrasAlerta          : "RegraAlertaId:Id"
+Alertas                -[#595959,plain]-^  StatusAlertas         : "StatusAlertaId:Id"
+ChecksIntegridade      -[#595959,plain]-^  Fornecedores          : "FornecedorId:Id"
+Contratos              -[#595959,plain]-^  Fornecedores          : "FornecedorId:Id"
+Contratos              -[#595959,plain]-^  OrgaosPublicos        : "OrgaoPublicoId:Id"
+Denuncias              -[#595959,plain]-^  Alertas               : "AlertaId:Id"
+Denuncias              -[#595959,plain]-^  Users                 : "UserId:Id"
+Despesas               -[#595959,plain]-^  Fornecedores          : "FornecedorId:Id"
+Despesas               -[#595959,plain]-^  OrgaosPublicos        : "OrgaoPublicoId:Id"
+ItensContrato          -[#595959,plain]-^  Contratos             : "ContratoId:Id"
+ItensDespesa           -[#595959,plain]-^  Despesas              : "DespesaId:Id"
+LogsAuditoria          -[#595959,plain]-^  Users                 : "UserId:Id"
+RespostasAlerta        -[#595959,plain]-^  Alertas               : "AlertaId:Id"
+RespostasAlerta        -[#595959,plain]-^  Users                 : "UserId:Id"
+UserProfiles           -[#595959,plain]-^  Users                 : "UserId:Id"
+Users                  -[#595959,plain]-^  Roles                 : "RoleId:Id"
+@enduml

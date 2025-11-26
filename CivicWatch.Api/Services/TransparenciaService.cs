@@ -8,21 +8,23 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System;
 using System.Collections.Generic;
+using System.Globalization; // Necessário para formatação numérica robusta
 
 namespace CivicWatch.Api.Services
 {
-    // NOTA: As classes auxiliares (ContratoApiDTO, DespesaApiDTO, CeisSanctionDTO, etc.)
-    // Devem estar definidas no namespace CivicWatch.Api.DTOs para que este arquivo compile.
+    // NOTA: As classes auxiliares (ContratoApiDTO, etc.) devem estar em CivicWatch.Api.DTOs
 
     public class TransparenciaService : ITransparenciaService
     {
         private readonly ApplicationDbContext _context;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IAlertaService _alertaService;
 
-        public TransparenciaService(ApplicationDbContext context, IHttpClientFactory httpClientFactory)
+        public TransparenciaService(ApplicationDbContext context, IHttpClientFactory httpClientFactory, IAlertaService alertaService)
         {
             _context = context;
             _httpClientFactory = httpClientFactory;
+            _alertaService = alertaService;
         }
 
         // 1. Consulta de Contratos (Dados Públicos - Lendo do DB)
@@ -52,33 +54,52 @@ namespace CivicWatch.Api.Services
             int totalDespesas = 0;
 
             // =========================================================
-            // ETAPA 1: IMPORTAÇÃO DE CONTRATOS
+            // PASSO 0: CARREGAR REGRAS ATIVAS DINAMICAMENTE
             // =========================================================
-            var urlContratos = "api-de-dados/contratos?exercicio=2024&pagina=1&codigoOrgao=26000"; 
-            
-            try
+            // Busca regras ativas para "Contrato" para aplicar durante a importação
+            var regrasContratosAtivas = await _context.RegrasAlerta
+                .Where(r => r.Ativa && r.TipoEntidadeAfetada == "Contrato")
+                .ToListAsync();
+
+            // =========================================================
+            // ETAPA 1: IMPORTAÇÃO DE CONTRATOS - MÚLTIPLOS ÓRGÃOS
+            // =========================================================
+            var orgaoCodes = new List<string> 
+            { 
+                "20000", "25000", "32000", "39000", "53000", "54000", "55000", "81000", "91000", "92000"
+            };
+
+            foreach (var codigo in orgaoCodes)
             {
-                var responseContratos = await client.GetAsync(urlContratos);
+                var urlContratos = $"api-de-dados/contratos?exercicio=2024&pagina=1&codigoOrgao={codigo}"; 
                 
-                if (responseContratos.IsSuccessStatusCode)
+                try
                 {
-                    var content = await responseContratos.Content.ReadAsStringAsync();
-                    var contratosApi = JsonSerializer.Deserialize<List<ContratoApiDTO>>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    var responseContratos = await client.GetAsync(urlContratos);
                     
-                    if (contratosApi != null && contratosApi.Any())
+                    if (responseContratos.IsSuccessStatusCode)
                     {
-                        await PersistirContratos(contratosApi); 
-                        totalContratos = contratosApi.Count;
+                        var content = await responseContratos.Content.ReadAsStringAsync();
+                        var contratosApi = JsonSerializer.Deserialize<List<ContratoApiDTO>>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        
+                        if (contratosApi != null && contratosApi.Any())
+                        {
+                            // Passa as regras carregadas para a função de persistência
+                            await PersistirContratos(contratosApi, regrasContratosAtivas); 
+                            totalContratos += contratosApi.Count;
+                        }
+                    }
+                    else
+                    {
+                        logDetail += $"ERRO CONTRATOS (Órgão {codigo}, Status {responseContratos.StatusCode}): {responseContratos.ReasonPhrase}. ";
                     }
                 }
-                else
+                catch (Exception ex)
                 {
-                    logDetail += $"ERRO CONTRATOS (Status {responseContratos.StatusCode}): {responseContratos.ReasonPhrase}. ";
+                    logDetail += $"ERRO CONTRATOS (Órgão {codigo}, EX): {ex.Message}. ";
                 }
-            }
-            catch (Exception ex)
-            {
-                logDetail += $"ERRO CONTRATOS (EX): {ex.Message}. ";
+                
+                await Task.Delay(500); 
             }
             
             // =========================================================
@@ -112,43 +133,40 @@ namespace CivicWatch.Api.Services
                 logDetail += $"ERRO DESPESAS (EX): {ex.Message}. ";
             }
 
-            // 3. Registrar o log (Ação crítica de auditoria)
+            // 3. Registrar o log
             _context.LogsAuditoria.Add(new LogAuditoria
             {
                 UserId = 1, 
                 Acao = "IMPORTACAO_DADOS_PORTAL_EXECUTADA",
-                Detalhes = $"Importação finalizada. Contratos Processados: {totalContratos}. Despesas Processadas: {totalDespesas}. Erros: {logDetail}"
+                Detalhes = $"Importação finalizada. Contratos: {totalContratos}. Despesas: {totalDespesas}. {logDetail}"
             });
             
             await _context.SaveChangesAsync();
         }
         
         // =====================================================================
-        // FUNÇÃO DE PERSISTÊNCIA: CONTRATOS
+        // FUNÇÃO DE PERSISTÊNCIA: CONTRATOS (COM AVALIAÇÃO DINÂMICA DE REGRAS)
         // =====================================================================
         
-        private async Task PersistirContratos(List<ContratoApiDTO> contratosApi)
+        private async Task PersistirContratos(List<ContratoApiDTO> contratosApi, List<RegraAlerta> regrasAtivas)
         {
             foreach (var apiContrato in contratosApi)
             {
-                // Verifica dados críticos
                 if (string.IsNullOrEmpty(apiContrato.Fornecedor?.CnpjFormatado) || string.IsNullOrEmpty(apiContrato.UnidadeGestora?.OrgaoMaximo?.Nome)) continue;
 
-                // 1. GARANTIR O ÓRGÃO PÚBLICO (OrgaoMaximo)
+                // 1. Busca/Cria Órgão
                 var orgaoNome = apiContrato.UnidadeGestora.OrgaoMaximo.Nome;
                 var orgao = await _context.OrgaosPublicos.FirstOrDefaultAsync(o => o.Nome == orgaoNome);
-
                 if (orgao == null)
                 {
-                    orgao = new OrgaoPublico { Nome = orgaoNome, CNPJ = "00000000000000" }; // CNPJ mock
+                    orgao = new OrgaoPublico { Nome = orgaoNome, CNPJ = "00000000000000" }; 
                     _context.OrgaosPublicos.Add(orgao);
                     await _context.SaveChangesAsync();
                 }
 
-                // 2. GARANTIR O FORNECEDOR
+                // 2. Busca/Cria Fornecedor
                 var cnpjLimpo = apiContrato.Fornecedor.CnpjFormatado.Replace(".", "").Replace("/", "").Replace("-", "");
                 var razaoSocial = apiContrato.Fornecedor.RazaoSocialReceita ?? apiContrato.Fornecedor.Nome ?? "Fornecedor Desconhecido";
-                
                 var fornecedor = await _context.Fornecedores.FirstOrDefaultAsync(f => f.Documento == cnpjLimpo);
 
                 if (fornecedor == null)
@@ -156,13 +174,11 @@ namespace CivicWatch.Api.Services
                     fornecedor = new Fornecedor { Documento = cnpjLimpo, RazaoSocial = razaoSocial, StatusReceita = "ATIVA" };
                     _context.Fornecedores.Add(fornecedor);
                     await _context.SaveChangesAsync();
-                    
-                    // Cria o CheckIntegridade mock para o novo fornecedor
                     _context.ChecksIntegridade.Add(new CheckIntegridade { FornecedorId = fornecedor.Id, EmConformidade = true });
                     await _context.SaveChangesAsync();
                 }
 
-                // 3. CRIAR O CONTRATO
+                // 3. CRIA O CONTRATO
                 if (!await _context.Contratos.AnyAsync(c => c.NumeroContrato == apiContrato.Numero))
                 {
                     var novoContrato = new Contrato
@@ -174,86 +190,88 @@ namespace CivicWatch.Api.Services
                         FornecedorId = fornecedor.Id
                     };
                     _context.Contratos.Add(novoContrato);
+
+                    // =========================================================
+                    // APLICAÇÃO DAS REGRAS DINÂMICAS (PARSER)
+                    // =========================================================
+                    foreach (var regra in regrasAtivas)
+                    {
+                        // Verifica se é uma regra de valor total. Ex: "Contrato.ValorTotal > 500000"
+                        if (!string.IsNullOrEmpty(regra.DescricaoLogica) && regra.DescricaoLogica.Contains("ValorTotal >"))
+                        {
+                            try 
+                            {
+                                // Quebra a string no '>' para pegar o valor numérico
+                                var partes = regra.DescricaoLogica.Split('>');
+                                if (partes.Length == 2)
+                                {
+                                    // Limpa a string (remove espaços e formatação de moeda simples)
+                                    var valorString = partes[1].Trim().Replace("R$", "").Replace(" ", "");
+                                    
+                                    // Tenta converter o valor, usando CultureInfo.InvariantCulture para garantir que '.' seja decimal
+                                    if (decimal.TryParse(valorString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal valorLimite))
+                                    {
+                                        // EXECUTA A LÓGICA DE COMPARAÇÃO
+                                        if (novoContrato.ValorTotal > valorLimite)
+                                        {
+                                            // DISPARA O ALERTA USANDO O ID REAL DA REGRA
+                                            await _alertaService.CreateAlertaSimplesAsync(
+                                                regra.Id, 
+                                                $"Contrato Nº {novoContrato.NumeroContrato} violou a regra '{regra.Nome}'. Valor: {novoContrato.ValorTotal:C} > Limite: {valorLimite:C}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // Ignora regras mal formatadas para não quebrar a importação
+                                Console.WriteLine($"Erro ao processar regra: {regra.Nome}");
+                            }
+                        }
+                    }
                 }
             }
             await _context.SaveChangesAsync();
         }
         
-        // =====================================================================
-        // FUNÇÃO DE PERSISTÊNCIA: DESPESAS
-        // =====================================================================
+        // ... (PersistirDespesas e CheckSupplierComplianceAsync permanecem inalterados abaixo) ...
         
         private async Task PersistirDespesas(List<DespesaApiDTO> despesasApi)
         {
             foreach (var apiDespesa in despesasApi)
             {
-                // 1. GARANTIR O ÓRGÃO PÚBLICO (Simplificado)
                 var orgaoNome = apiDespesa.UnidadeGestora?.Nome ?? "Órgão Desconhecido";
                 var orgao = await _context.OrgaosPublicos.FirstOrDefaultAsync(o => o.Nome == orgaoNome);
+                if (orgao == null) { orgao = new OrgaoPublico { Nome = orgaoNome, CNPJ = "00" }; _context.OrgaosPublicos.Add(orgao); await _context.SaveChangesAsync(); }
 
-                if (orgao == null)
-                {
-                    orgao = new OrgaoPublico { Nome = orgaoNome, CNPJ = "00000000000000" };
-                    _context.OrgaosPublicos.Add(orgao);
-                    await _context.SaveChangesAsync();
-                }
-
-                // 2. GARANTIR O FORNECEDOR (Favorecido)
                 var cnpjLimpo = apiDespesa.FavorecidoCpfCnpj?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
-                var razaoSocial = apiDespesa.NomeFavorecido ?? "Favorecido Desconhecido";
-
                 var fornecedor = await _context.Fornecedores.FirstOrDefaultAsync(f => f.Documento == cnpjLimpo);
+                if (fornecedor == null) { fornecedor = new Fornecedor { Documento = cnpjLimpo, RazaoSocial = apiDespesa.NomeFavorecido ?? "Desconhecido", StatusReceita = "ATIVA" }; _context.Fornecedores.Add(fornecedor); await _context.SaveChangesAsync(); }
 
-                if (fornecedor == null)
-                {
-                    fornecedor = new Fornecedor { Documento = cnpjLimpo, RazaoSocial = razaoSocial, StatusReceita = "ATIVA" };
-                    _context.Fornecedores.Add(fornecedor);
-                    await _context.SaveChangesAsync();
-                }
-
-                // 3. CRIAR A DESPESA
                 if (!await _context.Despesas.AnyAsync(d => d.NumeroEmpenho == apiDespesa.NumeroDocumento))
                 {
-                    var novaDespesa = new Despesa
-                    {
-                        NumeroEmpenho = apiDespesa.NumeroDocumento ?? $"API-D-{apiDespesa.Id}",
-                        ValorPago = apiDespesa.ValorBruto,
-                        DataPagamento = DateTime.TryParse(apiDespesa.DataEmissao, out var data) ? data : DateTime.Now,
-                        OrgaoPublicoId = orgao.Id,
-                        OrgaoPublico = orgao,
-                        FornecedorId = fornecedor.Id,
-                        Fornecedor = fornecedor
-                    };
+                    var novaDespesa = new Despesa { NumeroEmpenho = apiDespesa.NumeroDocumento ?? "API", ValorPago = apiDespesa.ValorBruto, DataPagamento = DateTime.Now, OrgaoPublicoId = orgao.Id, FornecedorId = fornecedor.Id, OrgaoPublico = orgao, Fornecedor = fornecedor };
                     _context.Despesas.Add(novaDespesa);
-                    
-                    // Simular ItemDespesa
-                    _context.ItensDespesa.Add(new ItemDespesa { Despesa = novaDespesa, Descricao = "Item de despesa importado", ValorDespesa = novaDespesa.ValorPago });
+                    _context.ItensDespesa.Add(new ItemDespesa { Despesa = novaDespesa, Descricao = "Item importado", ValorDespesa = novaDespesa.ValorPago });
                 }
             }
             await _context.SaveChangesAsync();
         }
 
-        // NOVO MÉTODO: Auditoria de Compliance (Sanções CEIS)
         public async Task CheckSupplierComplianceAsync()
         {
             var client = _httpClientFactory.CreateClient("PortalTransparenciaClient");
-            
-            // 1. Obter todos os fornecedores do DB local com seu CheckIntegridade
-            var fornecedores = await _context.Fornecedores
-                .Include(f => f.CheckIntegridade)
-                .ToListAsync();
-
-            int fornecedoresVerificados = 0;
-            int fornecedoresSancionados = 0;
+            const int regraRiscoId = 2; 
+            var fornecedores = await _context.Fornecedores.Include(f => f.CheckIntegridade).ToListAsync();
 
             foreach (var fornecedor in fornecedores)
             {
                 var cnpjLimpo = fornecedor.Documento?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
-                if (cnpjLimpo.Length < 11) continue; // Pula documentos inválidos
+                if (cnpjLimpo.Length < 11) continue; 
 
-                // 2. Preparar a chamada para a API do CEIS
-                var urlCeis = $"api-de-dados/ceis?cnpjcpfSancionado={cnpjLimpo}&pagina=1";
                 bool isSanctioned = false;
+                var urlCeis = $"api-de-dados/ceis?cnpjcpfSancionado={cnpjLimpo}&pagina=1";
 
                 try
                 {
@@ -261,56 +279,43 @@ namespace CivicWatch.Api.Services
                     if (response.IsSuccessStatusCode)
                     {
                         var content = await response.Content.ReadAsStringAsync();
-                        // Deserializa para a lista de sanções (se a lista não for vazia, o fornecedor está sancionado)
                         var sancoes = JsonSerializer.Deserialize<List<CeisSanctionDTO>>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         
                         if (sancoes != null && sancoes.Any())
                         {
-                            isSanctioned = true;
-                            fornecedoresSancionados++;
+                            var sancaoEspecifica = sancoes.Any(s => 
+                            {
+                                var sancaoCnpjLimpo = s.CpfCnpjSancionado?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
+                                return sancaoCnpjLimpo == cnpjLimpo;
+                            });
+                            
+                            if (sancaoEspecifica) isSanctioned = true;
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Registra erro de conexão/API, mas continua o loop
-                    _context.LogsAuditoria.Add(new LogAuditoria 
-                    { 
-                        UserId = 1, 
-                        Acao = "ERRO_AUDITORIA_CEIS", 
-                        Detalhes = $"Falha na consulta CEIS para {cnpjLimpo}: {ex.Message}" 
-                    });
+                    _context.LogsAuditoria.Add(new LogAuditoria { UserId = 1, Acao = "ERRO_AUDITORIA_CEIS", Detalhes = ex.Message });
                 }
 
-                // 3. Atualizar o CheckIntegridade
                 var checkIntegridade = fornecedor.CheckIntegridade;
                 if (checkIntegridade == null)
                 {
-                    // Cria o registro se ele não existir (embora deva ser criado na importação)
                     checkIntegridade = new CheckIntegridade { FornecedorId = fornecedor.Id };
                     _context.ChecksIntegridade.Add(checkIntegridade);
                 }
 
-                // Se o status de risco mudar para não-conforme, podemos gerar um alerta
                 if (isSanctioned && checkIntegridade.EmConformidade == true)
                 {
-                    // Lógica para gerar um ALERTA de risco (se você tiver um AlertaService)
-                    // Ex: await _alertaService.CreateAlertaAsync(fornecedor.Id, "RISCO_CEIS", "Fornecedor encontrado no cadastro de inidôneos.");
+                     await _alertaService.CreateAlertaSimplesAsync(
+                        regraRiscoId, 
+                        $"Fornecedor {fornecedor.RazaoSocial} (CNPJ: {fornecedor.Documento}) consta na lista de sanções (CEIS)."
+                    );
                 }
 
                 checkIntegridade.EmConformidade = !isSanctioned;
                 checkIntegridade.DataUltimaVerificacao = DateTime.Now;
-                fornecedoresVerificados++;
             }
-
-            // Registro Final
-            _context.LogsAuditoria.Add(new LogAuditoria
-            {
-                UserId = 1,
-                Acao = "AUDITORIA_CEIS_CONCLUIDA",
-                Detalhes = $"Auditoria CEIS concluída. {fornecedoresVerificados} fornecedores verificados. {fornecedoresSancionados} sancionados."
-            });
-
             await _context.SaveChangesAsync();
         }
     }

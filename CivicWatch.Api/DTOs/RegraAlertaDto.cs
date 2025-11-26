@@ -4,6 +4,8 @@ namespace CivicWatch.Api.DTOs
 {
     public class RegraAlertaDto
     {
+        public int Id {get; set;} = 0;
+
         [Required]
         public string Nome { get; set; } = string.Empty;
         

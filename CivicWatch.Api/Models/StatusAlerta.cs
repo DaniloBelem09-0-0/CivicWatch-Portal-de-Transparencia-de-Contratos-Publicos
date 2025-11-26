@@ -12,7 +12,7 @@ namespace CivicWatch.Api.Models
         public required string Nome { get; set; }
         
         [StringLength(10)]
-        public string? CorHex { get; set; } 
+        public string CorHex { get; set; } = "";
 
         public ICollection<Alerta> Alertas { get; set; } = new List<Alerta>();
     }

@@ -2,8 +2,10 @@ using CivicWatch.Api.Data;
 using CivicWatch.Api.Models;
 using CivicWatch.Api.DTOs;
 using Microsoft.EntityFrameworkCore;
+using System.Linq;
 using System.Collections.Generic;
-using System.Linq; // Adicionado para IQueryable
+using System.Threading.Tasks;
+using System;
 
 namespace CivicWatch.Api.Services
 {
@@ -15,6 +17,40 @@ namespace CivicWatch.Api.Services
         {
             _context = context;
         }
+
+        // =========================================================================
+        // MÉTODO SIMPLES PARA DISPARAR ALERTAS POR TRIGGER (R$ 1M / CEIS)
+        // =========================================================================
+        public async Task CreateAlertaSimplesAsync(int regraId, string descricao)
+        {
+            // 1. Busca a Regra e o Status
+            var regra = await _context.RegrasAlerta.FindAsync(regraId);
+            var status = await _context.StatusAlertas.FirstOrDefaultAsync(s => s.Nome == "Pendente"); 
+
+            // Validação de segurança
+            if (regra == null || status == null)
+            {
+                throw new InvalidOperationException("Falha na configuração: Regra ou Status de Alerta 'Pendente' não encontrado no banco.");
+            }
+
+            var newAlerta = new Alerta
+            {
+                RegraAlertaId = regraId,
+                
+                // CORREÇÃO CS8601: Usamos o operador '!' porque já validamos que não são nulos no 'if' acima.
+                RegraAlerta = regra!, 
+                
+                StatusAlertaId = status.Id,
+                StatusAlerta = status!, // O '!' silencia o aviso CS8601
+                
+                DescricaoOcorrencia = descricao,
+                DataGeracao = DateTime.UtcNow
+            };
+
+            _context.Alertas.Add(newAlerta);
+            await _context.SaveChangesAsync();
+        }
+
 
         // =========================================================================
         // MÉTODOS DE CRIAÇÃO E CONSULTA DE REGRAS (CRUD Regras)
@@ -34,7 +70,6 @@ namespace CivicWatch.Api.Services
             return regra;
         }
         
-        // NOVO: Consultar Detalhe da Regra (GET /regras/{id})
         public async Task<RegraAlertaDto> GetRegraByIdAsync(int id)
         {
             var regra = await _context.RegrasAlerta
@@ -55,7 +90,6 @@ namespace CivicWatch.Api.Services
             return regra;
         }
 
-        // NOVO: Atualizar Regra (PUT /regras/{id})
         public async Task UpdateRegraAsync(int id, RegraAlertaDto dto)
         {
             var regra = await _context.RegrasAlerta.FindAsync(id);
@@ -72,7 +106,6 @@ namespace CivicWatch.Api.Services
             await _context.SaveChangesAsync();
         }
 
-        // NOVO: Excluir Regra (DELETE /regras/{id})
         public async Task DeleteRegraAsync(int id)
         {
             var regra = await _context.RegrasAlerta.FindAsync(id);
@@ -85,12 +118,12 @@ namespace CivicWatch.Api.Services
             await _context.SaveChangesAsync();
         }
 
-        // NOVO: Listar Todas as Regras (GET /regras)
         public async Task<IEnumerable<RegraAlertaDto>> GetRegrasAsync()
         {
              return await _context.RegrasAlerta
                 .Select(r => new RegraAlertaDto 
                 {
+                    Id = r.Id,
                     Nome = r.Nome,
                     DescricaoLogica = r.DescricaoLogica,
                     Ativa = r.Ativa,
@@ -100,7 +133,7 @@ namespace CivicWatch.Api.Services
         }
 
         // =========================================================================
-        // MÉTODOS DO WORKFLOW DE ALERTA (Existentes)
+        // MÉTODOS DO WORKFLOW DE ALERTA
         // =========================================================================
 
         public async Task<IEnumerable<AlertaResponseDto>> GetAlertasPendentesAsync()

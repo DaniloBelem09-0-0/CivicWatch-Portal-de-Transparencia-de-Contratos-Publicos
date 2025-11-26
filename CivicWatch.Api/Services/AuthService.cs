@@ -85,7 +85,6 @@ namespace CivicWatch.Api.Services
             return newUser;
         }
 
-        // --- Método de Geração de Token ---
         public async Task<string> GenerateJwtToken(User user)
         {
             var claims = new List<Claim>
