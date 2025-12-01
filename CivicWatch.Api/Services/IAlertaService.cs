@@ -27,5 +27,8 @@ namespace CivicWatch.Api.Services
         
         // NOVO: Listar Todas as Regras (Para endpoint GET /alerta/regras)
         Task<IEnumerable<RegraAlertaDto>> GetRegrasAsync(); 
+
+        Task<RespostaAlertaResponseDto> GetUltimaRespostaAsync(int alertaId);
+
     }
 }

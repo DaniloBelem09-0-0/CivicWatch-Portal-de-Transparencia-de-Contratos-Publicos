@@ -195,5 +195,32 @@ namespace CivicWatch.Api.Services
 
             await _context.SaveChangesAsync();
         }
+
+        public async Task<RespostaAlertaResponseDto> GetUltimaRespostaAsync(int alertaId)
+        {
+            // 1. Busca a última RespostaAlerta para este AlertaId
+            var resposta = await _context.RespostasAlerta
+                .Where(r => r.AlertaId == alertaId)
+                .Include(r => r.User) // Inclui o usuário para pegar o nome
+                .ThenInclude(u => u.UserProfile) // Inclui o perfil para pegar NomeCompleto
+                .OrderByDescending(r => r.DataResposta) // Pega a mais recente
+                .FirstOrDefaultAsync();
+
+            if (resposta == null)
+            {
+                throw new KeyNotFoundException("Nenhuma resposta encontrada para este alerta.");
+            }
+
+            // 2. Mapeia para o DTO de resposta
+            var userProfile = resposta.User?.UserProfile;
+
+            return new RespostaAlertaResponseDto
+            {
+                Justificativa = resposta.Justificativa,
+                DataResposta = resposta.DataResposta,
+                NomeGestor = userProfile?.NomeCompleto ?? "Usuário Desconhecido",
+                UsernameGestor = resposta.User?.Username ?? "Desconhecido"
+            };
+        }
     }
 }

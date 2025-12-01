@@ -143,5 +143,24 @@ namespace CivicWatch.Api.Controllers
                 return NotFound(ex.Message);
             }
         }
+
+        [HttpGet("{alertaId}/resposta")]
+        [Authorize(Roles = "Auditor")]
+        public async Task<ActionResult<RespostaAlertaResponseDto>> GetAlertaResposta(int alertaId)
+        {
+            try
+            {
+                var resposta = await _alertaService.GetUltimaRespostaAsync(alertaId);
+                return Ok(resposta);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Erro ao buscar resposta: {ex.Message}");
+            }
+        }
     }
 }

@@ -27,7 +27,7 @@ namespace CivicWatch.Api.Services
             _alertaService = alertaService;
         }
 
-        // 1. Consulta de Contratos (Dados Públicos - Lendo do DB)
+        // 1. Consulta de Contratos (Dados Públicos - Lendo do DB Local)
         public async Task<IEnumerable<ContratoResponseDto>> GetContratosAsync()
         {
             return await _context.Contratos
@@ -192,29 +192,23 @@ namespace CivicWatch.Api.Services
                     _context.Contratos.Add(novoContrato);
 
                     // =========================================================
-                    // APLICAÇÃO DAS REGRAS DINÂMICAS (PARSER)
+                    // APLICAÇÃO DAS REGRAS DINÂMICAS
                     // =========================================================
                     foreach (var regra in regrasAtivas)
                     {
-                        // Verifica se é uma regra de valor total. Ex: "Contrato.ValorTotal > 500000"
                         if (!string.IsNullOrEmpty(regra.DescricaoLogica) && regra.DescricaoLogica.Contains("ValorTotal >"))
                         {
                             try 
                             {
-                                // Quebra a string no '>' para pegar o valor numérico
                                 var partes = regra.DescricaoLogica.Split('>');
                                 if (partes.Length == 2)
                                 {
-                                    // Limpa a string (remove espaços e formatação de moeda simples)
                                     var valorString = partes[1].Trim().Replace("R$", "").Replace(" ", "");
                                     
-                                    // Tenta converter o valor, usando CultureInfo.InvariantCulture para garantir que '.' seja decimal
                                     if (decimal.TryParse(valorString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal valorLimite))
                                     {
-                                        // EXECUTA A LÓGICA DE COMPARAÇÃO
                                         if (novoContrato.ValorTotal > valorLimite)
                                         {
-                                            // DISPARA O ALERTA USANDO O ID REAL DA REGRA
                                             await _alertaService.CreateAlertaSimplesAsync(
                                                 regra.Id, 
                                                 $"Contrato Nº {novoContrato.NumeroContrato} violou a regra '{regra.Nome}'. Valor: {novoContrato.ValorTotal:C} > Limite: {valorLimite:C}"
@@ -225,7 +219,6 @@ namespace CivicWatch.Api.Services
                             }
                             catch
                             {
-                                // Ignora regras mal formatadas para não quebrar a importação
                                 Console.WriteLine($"Erro ao processar regra: {regra.Nome}");
                             }
                         }
@@ -234,8 +227,6 @@ namespace CivicWatch.Api.Services
             }
             await _context.SaveChangesAsync();
         }
-        
-        // ... (PersistirDespesas e CheckSupplierComplianceAsync permanecem inalterados abaixo) ...
         
         private async Task PersistirDespesas(List<DespesaApiDTO> despesasApi)
         {
@@ -259,20 +250,158 @@ namespace CivicWatch.Api.Services
             await _context.SaveChangesAsync();
         }
 
+        // =====================================================================
+        // AUDITORIA DE COMPLIANCE: CEIS + AUDITORIA INTERNA (ALERTAS REJEITADOS)
+        // =====================================================================
         public async Task CheckSupplierComplianceAsync()
         {
             var client = _httpClientFactory.CreateClient("PortalTransparenciaClient");
             const int regraRiscoId = 2; 
-            var fornecedores = await _context.Fornecedores.Include(f => f.CheckIntegridade).ToListAsync();
+
+            // 0. PASSO PRÉVIO: Identificar contratos irregulares (Alerta fechado e NÃO justificado)
+            var logsRejeicao = await _context.LogsAuditoria
+                .Where(l => l.Detalhes.Contains("Justificativa: False"))
+                .Select(l => l.Detalhes)
+                .ToListAsync();
+
+            var alertasRejeitadosIds = new List<int>();
+            foreach (var log in logsRejeicao)
+            {
+                var parts = log.Split(' ');
+                if (parts.Length > 1 && int.TryParse(parts[1], out int id))
+                {
+                    alertasRejeitadosIds.Add(id);
+                }
+            }
+
+            var descricoesAlertasRejeitados = await _context.Alertas
+                .Where(a => alertasRejeitadosIds.Contains(a.Id))
+                .Select(a => a.DescricaoOcorrencia)
+                .ToListAsync();
+
+            var contratosIrregulares = new HashSet<string>();
+            foreach (var desc in descricoesAlertasRejeitados)
+            {
+                if (!string.IsNullOrEmpty(desc))
+                {
+                    var parts = desc.Split(' ');
+                    // Padrão: "Contrato Nº {numero} ..."
+                    if (parts.Length > 2 && parts[0] == "Contrato" && parts[1] == "Nº")
+                    {
+                        contratosIrregulares.Add(parts[2]);
+                    }
+                }
+            }
+
+            // 1. Obter fornecedores e seus contratos
+            var fornecedores = await _context.Fornecedores
+                .Include(f => f.CheckIntegridade)
+                .Include(f => f.Contratos)
+                .ToListAsync();
+
+            int fornecedoresVerificados = 0;
+            int fornecedoresSancionados = 0;
 
             foreach (var fornecedor in fornecedores)
             {
                 var cnpjLimpo = fornecedor.Documento?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
-                if (cnpjLimpo.Length < 11) continue; 
-
                 bool isSanctioned = false;
-                var urlCeis = $"api-de-dados/ceis?cnpjcpfSancionado={cnpjLimpo}&pagina=1";
+                
+                // --- VERIFICAÇÃO 1: Auditoria Externa (CEIS) ---
+                if (cnpjLimpo.Length >= 11)
+                {
+                    var urlCeis = $"api-de-dados/ceis?cnpjcpfSancionado={cnpjLimpo}&pagina=1";
+                    try
+                    {
+                        var response = await client.GetAsync(urlCeis);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var content = await response.Content.ReadAsStringAsync();
+                            var sancoes = JsonSerializer.Deserialize<List<CeisSanctionDTO>>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            
+                            if (sancoes != null && sancoes.Any())
+                            {
+                                var sancaoEspecifica = sancoes.Any(s => 
+                                {
+                                    var sancaoCnpjLimpo = s.CpfCnpjSancionado?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
+                                    return sancaoCnpjLimpo == cnpjLimpo;
+                                });
+                                
+                                if (sancaoEspecifica) isSanctioned = true;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _context.LogsAuditoria.Add(new LogAuditoria { UserId = 1, Acao = "ERRO_AUDITORIA_CEIS", Detalhes = ex.Message });
+                    }
+                }
 
+                // --- VERIFICAÇÃO 2: Auditoria Interna (Contratos Rejeitados) ---
+                if (!isSanctioned && fornecedor.Contratos.Any(c => contratosIrregulares.Contains(c.NumeroContrato)))
+                {
+                    isSanctioned = true;
+                }
+
+                if (isSanctioned) fornecedoresSancionados++;
+
+                // Atualização do CheckIntegridade
+                var checkIntegridade = fornecedor.CheckIntegridade;
+                if (checkIntegridade == null)
+                {
+                    checkIntegridade = new CheckIntegridade { FornecedorId = fornecedor.Id };
+                    _context.ChecksIntegridade.Add(checkIntegridade);
+                }
+
+                // GATILHO DE ALERTA DE RISCO (Se mudou de OK para RISCO)
+                if (isSanctioned && checkIntegridade.EmConformidade == true)
+                {
+                     await _alertaService.CreateAlertaSimplesAsync(
+                        regraRiscoId, 
+                        $"Fornecedor {fornecedor.RazaoSocial} (CNPJ: {fornecedor.Documento}) identificado como risco (CEIS ou Auditoria Interna)."
+                    );
+                }
+
+                checkIntegridade.EmConformidade = !isSanctioned;
+                checkIntegridade.DataUltimaVerificacao = DateTime.Now;
+                fornecedoresVerificados++;
+            }
+
+            _context.LogsAuditoria.Add(new LogAuditoria
+            {
+                UserId = 1,
+                Acao = "AUDITORIA_CEIS_CONCLUIDA",
+                Detalhes = $"Auditoria CEIS concluída. {fornecedoresVerificados} verificados. {fornecedoresSancionados} identificados com risco."
+            });
+
+            await _context.SaveChangesAsync();
+        }
+
+        // =====================================================================
+        // NOVO MÉTODO: OBTENÇÃO DE DETALHES DAS INCONFORMIDADES
+        // =====================================================================
+        
+        public async Task<List<string>> GetSupplierNonComplianceReasonsAsync(int fornecedorId)
+        {
+            var reasons = new List<string>();
+            var client = _httpClientFactory.CreateClient("PortalTransparenciaClient");
+            
+            var fornecedor = await _context.Fornecedores
+                .Include(f => f.Contratos)
+                .FirstOrDefaultAsync(f => f.Id == fornecedorId);
+
+            if (fornecedor == null)
+            {
+                reasons.Add("Fornecedor não encontrado.");
+                return reasons;
+            }
+
+            var cnpjLimpo = fornecedor.Documento?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
+
+            // --- 1. VERIFICAR SANÇÕES CEIS (EXTERNA) ---
+            if (cnpjLimpo.Length >= 11)
+            {
+                var urlCeis = $"api-de-dados/ceis?cnpjcpfSancionado={cnpjLimpo}&pagina=1";
                 try
                 {
                     var response = await client.GetAsync(urlCeis);
@@ -281,42 +410,66 @@ namespace CivicWatch.Api.Services
                         var content = await response.Content.ReadAsStringAsync();
                         var sancoes = JsonSerializer.Deserialize<List<CeisSanctionDTO>>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         
-                        if (sancoes != null && sancoes.Any())
+                        // Verifica se há sanção específica para o CNPJ
+                        if (sancoes != null && sancoes.Any(s => (s.CpfCnpjSancionado?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "") == cnpjLimpo))
                         {
-                            var sancaoEspecifica = sancoes.Any(s => 
-                            {
-                                var sancaoCnpjLimpo = s.CpfCnpjSancionado?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "";
-                                return sancaoCnpjLimpo == cnpjLimpo;
-                            });
-                            
-                            if (sancaoEspecifica) isSanctioned = true;
+                            reasons.Add("Sanção externa identificada no Cadastro Nacional de Empresas Inidôneas e Suspensas (CEIS).");
+                            // Adicionar detalhes se necessário
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _context.LogsAuditoria.Add(new LogAuditoria { UserId = 1, Acao = "ERRO_AUDITORIA_CEIS", Detalhes = ex.Message });
+                    reasons.Add($"Erro ao consultar API CEIS: {ex.Message}");
                 }
-
-                var checkIntegridade = fornecedor.CheckIntegridade;
-                if (checkIntegridade == null)
-                {
-                    checkIntegridade = new CheckIntegridade { FornecedorId = fornecedor.Id };
-                    _context.ChecksIntegridade.Add(checkIntegridade);
-                }
-
-                if (isSanctioned && checkIntegridade.EmConformidade == true)
-                {
-                     await _alertaService.CreateAlertaSimplesAsync(
-                        regraRiscoId, 
-                        $"Fornecedor {fornecedor.RazaoSocial} (CNPJ: {fornecedor.Documento}) consta na lista de sanções (CEIS)."
-                    );
-                }
-
-                checkIntegridade.EmConformidade = !isSanctioned;
-                checkIntegridade.DataUltimaVerificacao = DateTime.Now;
             }
-            await _context.SaveChangesAsync();
+
+            // --- 2. VERIFICAR AUDITORIA INTERNA (ALERTA NÃO JUSTIFICADO) ---
+            
+            var supplierContractNumbers = fornecedor.Contratos.Select(c => c.NumeroContrato).ToList();
+            
+            // Busca logs de rejeição ("Justificativa: False")
+            var logsRejeicao = await _context.LogsAuditoria
+                .Where(l => l.Detalhes.Contains("Justificativa: False"))
+                .Select(l => l.Detalhes)
+                .ToListAsync();
+
+            var alertasRejeitadosIds = new List<int>();
+            foreach (var log in logsRejeicao)
+            {
+                var parts = log.Split(' ');
+                if (parts.Length > 1 && int.TryParse(parts[1], out int id))
+                {
+                    alertasRejeitadosIds.Add(id);
+                }
+            }
+
+            // Busca os alertas que foram rejeitados
+            var nonCompliantAlerts = await _context.Alertas
+                .Where(a => alertasRejeitadosIds.Contains(a.Id))
+                .ToListAsync();
+
+            foreach (var alerta in nonCompliantAlerts)
+            {
+                // Padrão: "Contrato Nº {numero}..."
+                if (alerta.DescricaoOcorrencia.StartsWith("Contrato Nº "))
+                {
+                    var contractNumber = alerta.DescricaoOcorrencia.Split(' ')[2];
+                    
+                    // Se o contrato irregular pertence a este fornecedor
+                    if (supplierContractNumbers.Contains(contractNumber))
+                    {
+                        reasons.Add($"Alerta interno no Contrato Nº {contractNumber} foi marcado como 'Não Justificado' pelo Auditor. Detalhe: {alerta.DescricaoOcorrencia}");
+                    }
+                }
+            }
+
+            if (!reasons.Any())
+            {
+                reasons.Add("Nenhuma inconformidade registrada ou identificada na última auditoria.");
+            }
+
+            return reasons;
         }
     }
 }

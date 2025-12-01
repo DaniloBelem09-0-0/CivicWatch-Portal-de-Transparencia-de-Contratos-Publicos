@@ -89,5 +89,31 @@ namespace CivicWatch.Api.Controllers
                 return NotFound($"Fornecedor com ID {id} não encontrado.");
             }
         }
+
+
+        [HttpGet("{fornecedorId}/inconformidades")]// Apenas Roles de auditoria podem acessar
+        public async Task<ActionResult<List<string>>> GetFornecedorInconformidades(int fornecedorId)
+        {
+            try
+            {
+                var inconformidades = await _fornecedorService.GetSupplierNonComplianceReasonsAsync(fornecedorId);
+                
+                // Se a lista estiver vazia, o fornecedor está em conformidade.
+                if (inconformidades.Count == 0 || (inconformidades.Count == 1 && inconformidades[0].Contains("Nenhuma inconformidade")))
+                {
+                    return Ok(new List<string> { "Em conformidade. Nenhuma sanção ou rejeição de alerta encontrada." });
+                }
+
+                return Ok(inconformidades);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Erro ao buscar inconformidades: {ex.Message}");
+            }
+        }
     }
 }
