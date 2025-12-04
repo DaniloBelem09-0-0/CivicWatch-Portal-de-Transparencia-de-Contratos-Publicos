@@ -14,7 +14,7 @@ namespace CivicWatch.Api.Services
     public class FornecedorService : IFornecedorService
     {
         private readonly ApplicationDbContext _context;
-        private readonly IHttpClientFactory _httpClientFactory; // NOVO: Necessário para auditoria CEIS
+        private readonly IHttpClientFactory _httpClientFactory;
 
         public FornecedorService(ApplicationDbContext context, IHttpClientFactory httpClientFactory)
         {
@@ -103,8 +103,6 @@ namespace CivicWatch.Api.Services
             if (fornecedor == null) throw new KeyNotFoundException();
 
             fornecedor.RazaoSocial = dto.RazaoSocial;
-            // Atualizar outros campos se necessário
-            
             await _context.SaveChangesAsync();
         }
 
@@ -118,7 +116,7 @@ namespace CivicWatch.Api.Services
             await _context.SaveChangesAsync();
         }
 
-        // 6. IMPLEMENTAÇÃO DO MÉTODO DE INCONFORMIDADES (CORREÇÃO DO ERRO CS0535)
+        // 6. IMPLEMENTAÇÃO DO MÉTODO DE INCONFORMIDADES (ATUALIZADO)
         public async Task<List<string>> GetSupplierNonComplianceReasonsAsync(int fornecedorId)
         {
             var reasons = new List<string>();
@@ -126,7 +124,7 @@ namespace CivicWatch.Api.Services
             
             var fornecedor = await _context.Fornecedores
                 .Include(f => f.Contratos)
-                .Include(f => f.CheckIntegridade) // Importante para ver o status atual
+                .Include(f => f.CheckIntegridade)
                 .FirstOrDefaultAsync(f => f.Id == fornecedorId);
 
             if (fornecedor == null) return new List<string> { "Fornecedor não encontrado." };
@@ -149,7 +147,6 @@ namespace CivicWatch.Api.Services
                     if (response.IsSuccessStatusCode)
                     {
                         var content = await response.Content.ReadAsStringAsync();
-                        // Usando o DTO de Sanção que deve estar em CivicWatch.Api.DTOs
                         var sancoes = JsonSerializer.Deserialize<List<CeisSanctionDTO>>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         
                         if (sancoes != null && sancoes.Any(s => (s.CpfCnpjSancionado?.Replace(".", "").Replace("/", "").Replace("-", "") ?? "") == cnpjLimpo))
@@ -164,33 +161,117 @@ namespace CivicWatch.Api.Services
                 }
             }
 
-            // --- B. VERIFICAR AUDITORIA INTERNA ---
-            var supplierContractNumbers = fornecedor.Contratos.Select(c => c.NumeroContrato).ToList();
+            // --- B. VERIFICAR AUDITORIA INTERNA (LOGS) ---
+            var supplierContractNumbers = fornecedor.Contratos?.Select(c => c.NumeroContrato).ToList() ?? new List<string>();
             
-            // Busca logs de rejeição
+            // Busca logs onde a fraude foi confirmada ("Justificativa: False")
             var logsRejeicao = await _context.LogsAuditoria
                 .Where(l => l.Detalhes.Contains("Justificativa: False"))
                 .ToListAsync();
 
             foreach (var log in logsRejeicao)
             {
-                // Verifica se o log menciona algum contrato deste fornecedor
-                // Lógica simplificada: procura o numero do contrato no texto do log
-                foreach (var contratoNum in supplierContractNumbers)
+                bool logPertenceAoFornecedor = false;
+                string origemIdentificacao = "Vínculo Indireto";
+
+                // 1. Verifica CNPJ/CPF no log
+                if (!string.IsNullOrEmpty(fornecedor.Documento) && log.Detalhes.Contains(fornecedor.Documento))
                 {
-                    if (log.Detalhes.Contains(contratoNum))
+                    logPertenceAoFornecedor = true;
+                    origemIdentificacao = "por Documento";
+                }
+                // 2. Verifica Razão Social no log
+                else if (!string.IsNullOrEmpty(fornecedor.RazaoSocial) && log.Detalhes.Contains(fornecedor.RazaoSocial))
+                {
+                    logPertenceAoFornecedor = true;
+                    origemIdentificacao = "por Nome";
+                }
+                // 3. Verifica Contratos
+                else
+                {
+                    foreach (var contratoNum in supplierContractNumbers)
                     {
-                        reasons.Add($"Auditoria interna rejeitada para o Contrato Nº {contratoNum}.");
+                        if (!string.IsNullOrEmpty(contratoNum) && log.Detalhes.Contains(contratoNum))
+                        {
+                            logPertenceAoFornecedor = true;
+                            origemIdentificacao = $"Contrato {contratoNum}";
+                            break;
+                        }
                     }
+                }
+
+                // --- LÓGICA DE EXTRAÇÃO DO COMENTÁRIO ---
+                if (logPertenceAoFornecedor)
+                {
+                    string comentarioExtraido = "Sem detalhes adicionais.";
+                    string chaveInicio = "Comentário: ";
+                    
+                    if (log.Detalhes.Contains(chaveInicio))
+                    {
+                        // Corta a string a partir do início do comentário
+                        string temp = log.Detalhes.Substring(log.Detalhes.IndexOf(chaveInicio) + chaveInicio.Length);
+                        
+                        // Tenta encontrar onde o comentário termina (antes do contexto original, se houver)
+                        int indiceFim = temp.IndexOf(". Contexto Original:");
+                        
+                        if (indiceFim > 0)
+                        {
+                            comentarioExtraido = temp.Substring(0, indiceFim);
+                        }
+                        else
+                        {
+                            comentarioExtraido = temp; // Pega até o final se não tiver contexto
+                        }
+                        
+                        // Limpa espaços em branco extras
+                        comentarioExtraido = comentarioExtraido.Trim();
+                    }
+
+                    // Formata a mensagem final exibindo a justificativa
+                    reasons.Add($"Irregularidade mantida ({origemIdentificacao}). Justificativa do Auditor: {comentarioExtraido}");
                 }
             }
 
+            // Se não encontrou logs nem sanções, mas o status está False, mostra mensagem genérica
             if (!reasons.Any())
             {
                 reasons.Add("Motivo da inconformidade não detalhado (Status marcado como Risco manualmente ou por simulação).");
             }
 
             return reasons;
+        }
+
+        // NOVO MÉTODO: Sincroniza o status do banco
+        public async Task SincronizarConformidadeAsync(int fornecedorId)
+        {
+            var reasons = await GetSupplierNonComplianceReasonsAsync(fornecedorId);
+            bool deveEstarEmConformidade = !reasons.Any();
+
+            var check = await _context.ChecksIntegridade
+                .FirstOrDefaultAsync(c => c.FornecedorId == fornecedorId);
+
+            if (check != null)
+            {
+                // Se o status calculado for diferente do atual, atualiza
+                if (check.EmConformidade != deveEstarEmConformidade)
+                {
+                    check.EmConformidade = deveEstarEmConformidade;
+                    check.DataUltimaVerificacao = DateTime.UtcNow;
+                    await _context.SaveChangesAsync();
+                }
+            }
+            else
+            {
+                var newCheck = new CheckIntegridade
+                {
+                    FornecedorId = fornecedorId,
+                    DataUltimaVerificacao = DateTime.UtcNow,
+                    StatusReceitaWs = "VERIFICADO",
+                    EmConformidade = deveEstarEmConformidade
+                };
+                _context.ChecksIntegridade.Add(newCheck);
+                await _context.SaveChangesAsync();
+            }
         }
     }
 }

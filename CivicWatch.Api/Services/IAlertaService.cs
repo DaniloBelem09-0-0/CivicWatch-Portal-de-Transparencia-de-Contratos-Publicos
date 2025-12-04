@@ -9,7 +9,7 @@ namespace CivicWatch.Api.Services
         Task<RegraAlerta> CreateRegraAsync(RegraAlertaDto dto);
         
         // NOVO: Método simples para uso interno (Trigger de valor/sanção)
-        Task CreateAlertaSimplesAsync(int regraId, string descricao); 
+        Task CreateAlertaSimplesAsync(int regraId, string descricao, int? fornecedorId = null); 
         
         // Consulta de Alertas (Auditor/Gestor)
         Task<IEnumerable<AlertaResponseDto>> GetAlertasPendentesAsync();
@@ -18,7 +18,7 @@ namespace CivicWatch.Api.Services
         Task SubmitRespostaAsync(int alertaId, RespostaAlertaDto dto, int userId);
 
         // Finalização do Alerta (Auditor)
-        Task CloseAlertaAsync(int alertaId, int userId, bool justificado);
+        Task CloseAlertaAsync(int alertaId,int userId, bool justificado, string justificativa);
 
         // CRUD de Regras
         Task<RegraAlertaDto> GetRegraByIdAsync(int id); 

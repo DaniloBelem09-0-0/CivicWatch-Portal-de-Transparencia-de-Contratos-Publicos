@@ -12,59 +12,47 @@ namespace CivicWatch.Api.Services
     public class AlertaService : IAlertaService
     {
         private readonly ApplicationDbContext _context;
+        private readonly IFornecedorService _fornecedorService; 
 
-        public AlertaService(ApplicationDbContext context)
+        public AlertaService(ApplicationDbContext context, IFornecedorService fornecedorService)
         {
             _context = context;
+            _fornecedorService = fornecedorService;
         }
 
-        // =========================================================================
-        // MÉTODO SIMPLES PARA DISPARAR ALERTAS POR TRIGGER (R$ 1M / CEIS)
-        // =========================================================================
-        public async Task CreateAlertaSimplesAsync(int regraId, string descricao)
+        // =================================================================
+        // MÉTODO DE TRIGGER (ATUALIZADO NA INTERFACE TAMBÉM)
+        // =================================================================
+        public async Task CreateAlertaSimplesAsync(int regraId, string descricao, int? fornecedorId = null)
         {
-            // 1. Busca a Regra e o Status
             var regra = await _context.RegrasAlerta.FindAsync(regraId);
             var status = await _context.StatusAlertas.FirstOrDefaultAsync(s => s.Nome == "Pendente"); 
 
-            // Validação de segurança
             if (regra == null || status == null)
-            {
-                throw new InvalidOperationException("Falha na configuração: Regra ou Status de Alerta 'Pendente' não encontrado no banco.");
-            }
+                throw new InvalidOperationException("Falha na configuração: Regra ou Status não encontrado.");
 
             var newAlerta = new Alerta
             {
                 RegraAlertaId = regraId,
-                
-                // CORREÇÃO CS8601: Usamos o operador '!' porque já validamos que não são nulos no 'if' acima.
                 RegraAlerta = regra!, 
-                
                 StatusAlertaId = status.Id,
-                StatusAlerta = status!, // O '!' silencia o aviso CS8601
-                
+                StatusAlerta = status!,
                 DescricaoOcorrencia = descricao,
-                DataGeracao = DateTime.UtcNow
+                DataGeracao = DateTime.UtcNow,
+                EntidadeRelacionadaId = fornecedorId,
+                TipoEntidadeRelacionada = fornecedorId.HasValue ? "Fornecedor" : null
             };
 
             _context.Alertas.Add(newAlerta);
             await _context.SaveChangesAsync();
         }
 
-
-        // =========================================================================
-        // MÉTODOS DE CRIAÇÃO E CONSULTA DE REGRAS (CRUD Regras)
-        // =========================================================================
-
+        // =================================================================
+        // CRUD REGRAS (Mantido)
+        // =================================================================
         public async Task<RegraAlerta> CreateRegraAsync(RegraAlertaDto dto)
         {
-            var regra = new RegraAlerta
-            {
-                Nome = dto.Nome,
-                DescricaoLogica = dto.DescricaoLogica,
-                Ativa = dto.Ativa,
-                TipoEntidadeAfetada = dto.TipoEntidadeAfetada
-            };
+            var regra = new RegraAlerta { Nome = dto.Nome, DescricaoLogica = dto.DescricaoLogica, Ativa = dto.Ativa, TipoEntidadeAfetada = dto.TipoEntidadeAfetada };
             _context.RegrasAlerta.Add(regra);
             await _context.SaveChangesAsync();
             return regra;
@@ -72,74 +60,45 @@ namespace CivicWatch.Api.Services
         
         public async Task<RegraAlertaDto> GetRegraByIdAsync(int id)
         {
-            var regra = await _context.RegrasAlerta
-                .Where(r => r.Id == id)
-                .Select(r => new RegraAlertaDto 
-                {
-                    Nome = r.Nome,
-                    DescricaoLogica = r.DescricaoLogica,
-                    Ativa = r.Ativa,
-                    TipoEntidadeAfetada = r.TipoEntidadeAfetada
-                })
+            var regra = await _context.RegrasAlerta.Where(r => r.Id == id)
+                .Select(r => new RegraAlertaDto { Nome = r.Nome, DescricaoLogica = r.DescricaoLogica, Ativa = r.Ativa, TipoEntidadeAfetada = r.TipoEntidadeAfetada })
                 .FirstOrDefaultAsync();
-
-            if (regra == null)
-            {
-                throw new KeyNotFoundException($"Regra de Alerta com ID {id} não encontrada.");
-            }
+            if (regra == null) throw new KeyNotFoundException($"Regra {id} não encontrada.");
             return regra;
         }
 
         public async Task UpdateRegraAsync(int id, RegraAlertaDto dto)
         {
             var regra = await _context.RegrasAlerta.FindAsync(id);
-            if (regra == null)
-            {
-                throw new KeyNotFoundException($"Regra de Alerta com ID {id} não encontrada.");
-            }
-
+            if (regra == null) throw new KeyNotFoundException($"Regra {id} não encontrada.");
             regra.Nome = dto.Nome;
             regra.DescricaoLogica = dto.DescricaoLogica;
             regra.Ativa = dto.Ativa;
             regra.TipoEntidadeAfetada = dto.TipoEntidadeAfetada;
-
             await _context.SaveChangesAsync();
         }
 
         public async Task DeleteRegraAsync(int id)
         {
             var regra = await _context.RegrasAlerta.FindAsync(id);
-            if (regra == null)
-            {
-                throw new KeyNotFoundException($"Regra de Alerta com ID {id} não encontrada.");
-            }
-
+            if (regra == null) throw new KeyNotFoundException($"Regra {id} não encontrada.");
             _context.RegrasAlerta.Remove(regra);
             await _context.SaveChangesAsync();
         }
 
         public async Task<IEnumerable<RegraAlertaDto>> GetRegrasAsync()
         {
-             return await _context.RegrasAlerta
-                .Select(r => new RegraAlertaDto 
-                {
-                    Id = r.Id,
-                    Nome = r.Nome,
-                    DescricaoLogica = r.DescricaoLogica,
-                    Ativa = r.Ativa,
-                    TipoEntidadeAfetada = r.TipoEntidadeAfetada
-                })
-                .ToListAsync();
+             return await _context.RegrasAlerta.Select(r => new RegraAlertaDto { Id = r.Id, Nome = r.Nome, DescricaoLogica = r.DescricaoLogica, Ativa = r.Ativa, TipoEntidadeAfetada = r.TipoEntidadeAfetada }).ToListAsync();
         }
 
-        // =========================================================================
-        // MÉTODOS DO WORKFLOW DE ALERTA
-        // =========================================================================
+        // =================================================================
+        // WORKFLOW DE ALERTA E SINCRONIZAÇÃO (CORRIGIDO)
+        // =================================================================
 
         public async Task<IEnumerable<AlertaResponseDto>> GetAlertasPendentesAsync()
         {
-            var alertas = await _context.Alertas
-                .Where(a => a.StatusAlertaId != 3) // Assume que Id 3 é "Fechado"
+            return await _context.Alertas
+                .Where(a => a.StatusAlertaId != 3) 
                 .Include(a => a.RegraAlerta)
                 .Include(a => a.StatusAlerta)
                 .Select(a => new AlertaResponseDto
@@ -152,8 +111,6 @@ namespace CivicWatch.Api.Services
                     StatusCor = a.StatusAlerta.CorHex 
                 })
                 .ToListAsync();
-            
-            return alertas;
         }
 
         public async Task SubmitRespostaAsync(int alertaId, RespostaAlertaDto dto, int userId)
@@ -161,64 +118,101 @@ namespace CivicWatch.Api.Services
             var alerta = await _context.Alertas.FindAsync(alertaId);
             if (alerta == null) throw new KeyNotFoundException("Alerta não encontrado.");
 
-            // 1. Cria a resposta
-            var resposta = new RespostaAlerta
-            {
-                AlertaId = alertaId,
-                Justificativa = dto.Justificativa,
-                UserId = userId
-            };
-            
+            var resposta = new RespostaAlerta { AlertaId = alertaId, Justificativa = dto.Justificativa, UserId = userId };
             _context.RespostasAlerta.Add(resposta);
-
-            // 2. Atualiza o status para "Em Revisão" (ID 2)
             alerta.StatusAlertaId = 2; 
-
             await _context.SaveChangesAsync();
         }
 
-        public async Task CloseAlertaAsync(int alertaId, int userId, bool justificado)
+        public async Task CloseAlertaAsync(int alertaId, int userId, bool justificado, string justificativa)
         {
             var alerta = await _context.Alertas.FindAsync(alertaId);
             if (alerta == null) throw new KeyNotFoundException("Alerta não encontrado.");
 
-            // 1. Atualiza o status para Fechado (ID 3)
+            // 1. Atualiza status
             alerta.StatusAlertaId = 3; 
 
-            // 2. Adicionar LogAuditoria
+            // 2. Log de Auditoria
+            // CORREÇÃO CRÍTICA: Restaurado o padrão "Justificativa: {bool}" para compatibilidade
+            // com o FornecedorService, e renomeado o texto livre para "Comentário".
             _context.LogsAuditoria.Add(new LogAuditoria 
             { 
                 UserId = userId,
                 Acao = $"ALERTA_FECHADO_AUDITOR",
-                Detalhes = $"Alerta {alertaId} fechado. Justificativa: {justificado}"
+                Detalhes = $"Alerta {alertaId} fechado. Justificativa: {justificado}. Comentário: {justificativa}. Contexto Original: {alerta.DescricaoOcorrencia}"
             });
 
             await _context.SaveChangesAsync();
+
+            // 3. TRIGGER DE SINCRONIZAÇÃO INTELIGENTE
+            int? fornecedorIdParaSync = null;
+
+            // CASO A: Vínculo direto existe
+            if (alerta.EntidadeRelacionadaId.HasValue && 
+                string.Equals(alerta.TipoEntidadeRelacionada, "Fornecedor", StringComparison.OrdinalIgnoreCase))
+            {
+                fornecedorIdParaSync = alerta.EntidadeRelacionadaId.Value;
+            }
+            // CASO B: Fallback (Busca Profunda)
+            else if (!string.IsNullOrEmpty(alerta.DescricaoOcorrencia))
+            {
+                // Estratégia 1: Busca direta por Nome ou Documento do Fornecedor na descrição
+                var fornecedorEncontrado = await _context.Fornecedores
+                    .Where(f => alerta.DescricaoOcorrencia.Contains(f.RazaoSocial) || 
+                               (f.Documento != null && alerta.DescricaoOcorrencia.Contains(f.Documento)))
+                    .FirstOrDefaultAsync();
+
+                // Estratégia 2: Se falhar, busca se a descrição cita um CONTRATO do banco
+                if (fornecedorEncontrado == null)
+                {
+                    // OBS: Trazemos todos os contratos para memória para evitar erro de tradução do LINQ (Contains reverso)
+                    // Em produção com muitos dados, isso deve ser otimizado com LIKE ou FullTextSearch
+                    var todosContratos = await _context.Contratos
+                        .Include(c => c.Fornecedor)
+                        .ToListAsync();
+
+                    var contratoCitado = todosContratos
+                        .FirstOrDefault(c => alerta.DescricaoOcorrencia.Contains(c.NumeroContrato));
+
+                    if (contratoCitado != null && contratoCitado.Fornecedor != null)
+                    {
+                        fornecedorEncontrado = contratoCitado.Fornecedor;
+                    }
+                }
+
+                if (fornecedorEncontrado != null)
+                {
+                    fornecedorIdParaSync = fornecedorEncontrado.Id;
+                    
+                    // Auto-correção: Salva o vínculo para não precisar buscar da próxima vez
+                    alerta.EntidadeRelacionadaId = fornecedorEncontrado.Id;
+                    alerta.TipoEntidadeRelacionada = "Fornecedor";
+                    await _context.SaveChangesAsync();
+                }
+            }
+
+            // Se encontrou alguém, força a atualização do status "Em Conformidade"
+            if (fornecedorIdParaSync.HasValue)
+            {
+                await _fornecedorService.SincronizarConformidadeAsync(fornecedorIdParaSync.Value);
+            }
         }
 
         public async Task<RespostaAlertaResponseDto> GetUltimaRespostaAsync(int alertaId)
         {
-            // 1. Busca a última RespostaAlerta para este AlertaId
             var resposta = await _context.RespostasAlerta
                 .Where(r => r.AlertaId == alertaId)
-                .Include(r => r.User) // Inclui o usuário para pegar o nome
-                .ThenInclude(u => u.UserProfile) // Inclui o perfil para pegar NomeCompleto
-                .OrderByDescending(r => r.DataResposta) // Pega a mais recente
+                .Include(r => r.User).ThenInclude(u => u.UserProfile)
+                .OrderByDescending(r => r.DataResposta)
                 .FirstOrDefaultAsync();
 
-            if (resposta == null)
-            {
-                throw new KeyNotFoundException("Nenhuma resposta encontrada para este alerta.");
-            }
-
-            // 2. Mapeia para o DTO de resposta
-            var userProfile = resposta.User?.UserProfile;
+            if (resposta == null) throw new KeyNotFoundException("Nenhuma resposta encontrada.");
 
             return new RespostaAlertaResponseDto
             {
                 Justificativa = resposta.Justificativa,
                 DataResposta = resposta.DataResposta,
-                NomeGestor = userProfile?.NomeCompleto ?? "Usuário Desconhecido",
+                NomeGestor = resposta.User?.UserProfile?.NomeCompleto ?? "Usuário Desconhecido",
                 UsernameGestor = resposta.User?.Username ?? "Desconhecido"
             };
         }

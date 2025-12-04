@@ -12,6 +12,7 @@ namespace CivicWatch.Api.Services
         Task UpdateFornecedorAsync(int id, FornecedorCadastroDto dto);
         Task DeleteFornecedorAsync(int id);
         Task<List<string>> GetSupplierNonComplianceReasonsAsync(int fornecedorId);
+        Task SincronizarConformidadeAsync(int fornecedorId);
 
     }
 }

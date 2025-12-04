@@ -56,7 +56,7 @@ namespace CivicWatch.Api.Controllers
         // PUT: api/alerta/{alertaId}/fechar (Ação do Auditor)
         [HttpPut("{alertaId}/fechar")]
         [Authorize(Roles = "Auditor")]
-        public async Task<ActionResult> CloseAlerta(int alertaId, [FromQuery] bool justificado)
+        public async Task<ActionResult> CloseAlerta(int alertaId, [FromQuery] bool justificado, [FromQuery] string? justificativa = null)
         {
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(userIdClaim)) return Unauthorized("ID do usuário não encontrada no token.");
@@ -64,7 +64,7 @@ namespace CivicWatch.Api.Controllers
 
             try
             {
-                await _alertaService.CloseAlertaAsync(alertaId, userId, justificado);
+                await _alertaService.CloseAlertaAsync(alertaId, userId, justificado, justificativa);
                 return NoContent();
             }
             catch (KeyNotFoundException ex)
@@ -72,6 +72,7 @@ namespace CivicWatch.Api.Controllers
                 return NotFound(ex.Message);
             }
         }
+        
         
         // =================================================================
         // ENDPOINTS DE GESTÃO DE REGRAS (CRUD RegraAlerta)
