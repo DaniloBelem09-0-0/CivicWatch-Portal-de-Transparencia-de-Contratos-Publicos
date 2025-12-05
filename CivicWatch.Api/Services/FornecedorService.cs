@@ -106,12 +106,30 @@ namespace CivicWatch.Api.Services
             await _context.SaveChangesAsync();
         }
 
-        // 5. DELETE
+        // 5. DELETE (CORRIGIDO PARA EVITAR ERRO DE FK)
         public async Task DeleteFornecedorAsync(int id)
         {
-            var fornecedor = await _context.Fornecedores.FindAsync(id);
+            // Precisamos carregar as dependências para excluí-las
+            var fornecedor = await _context.Fornecedores
+                .Include(f => f.CheckIntegridade)
+                .Include(f => f.Contratos) // Também excluímos contratos para evitar o mesmo erro lá
+                .FirstOrDefaultAsync(f => f.Id == id);
+
             if (fornecedor == null) throw new KeyNotFoundException();
 
+            // 1. Remove CheckIntegridade (o causador do erro atual)
+            if (fornecedor.CheckIntegridade != null)
+            {
+                _context.ChecksIntegridade.Remove(fornecedor.CheckIntegridade);
+            }
+
+            // 2. Remove Contratos vinculados (para garantir limpeza completa)
+            if (fornecedor.Contratos != null && fornecedor.Contratos.Any())
+            {
+                _context.Contratos.RemoveRange(fornecedor.Contratos);
+            }
+
+            // 3. Remove o Fornecedor
             _context.Fornecedores.Remove(fornecedor);
             await _context.SaveChangesAsync();
         }
@@ -161,10 +179,23 @@ namespace CivicWatch.Api.Services
                 }
             }
 
-            // --- B. VERIFICAR AUDITORIA INTERNA (LOGS) ---
+            // --- B. VERIFICAR ALERTAS ABERTOS VINCULADOS ---
             var supplierContractNumbers = fornecedor.Contratos?.Select(c => c.NumeroContrato).ToList() ?? new List<string>();
             
-            // Busca logs onde a fraude foi confirmada ("Justificativa: False")
+            var alertasAbertos = await _context.Alertas
+                .Include(a => a.RegraAlerta)
+                .Where(a => a.StatusAlertaId != 3 && 
+                            (a.DescricaoOcorrencia.Contains(fornecedor.Documento!) || 
+                             supplierContractNumbers.Any(cn => a.DescricaoOcorrencia.Contains(cn))
+                            )
+                ).ToListAsync();
+
+            foreach (var alerta in alertasAbertos)
+            {
+                reasons.Add($"Alerta aberto (Regra: {alerta.RegraAlerta.Nome}). Necessita de avaliação do Auditor/Gestor. Descrição: {alerta.DescricaoOcorrencia}");
+            }
+
+            // --- C. VERIFICAR AUDITORIA INTERNA (LOGS) ---
             var logsRejeicao = await _context.LogsAuditoria
                 .Where(l => l.Detalhes.Contains("Justificativa: False"))
                 .ToListAsync();
@@ -174,19 +205,16 @@ namespace CivicWatch.Api.Services
                 bool logPertenceAoFornecedor = false;
                 string origemIdentificacao = "Vínculo Indireto";
 
-                // 1. Verifica CNPJ/CPF no log
                 if (!string.IsNullOrEmpty(fornecedor.Documento) && log.Detalhes.Contains(fornecedor.Documento))
                 {
                     logPertenceAoFornecedor = true;
                     origemIdentificacao = "por Documento";
                 }
-                // 2. Verifica Razão Social no log
                 else if (!string.IsNullOrEmpty(fornecedor.RazaoSocial) && log.Detalhes.Contains(fornecedor.RazaoSocial))
                 {
                     logPertenceAoFornecedor = true;
                     origemIdentificacao = "por Nome";
                 }
-                // 3. Verifica Contratos
                 else
                 {
                     foreach (var contratoNum in supplierContractNumbers)
@@ -200,7 +228,6 @@ namespace CivicWatch.Api.Services
                     }
                 }
 
-                // --- LÓGICA DE EXTRAÇÃO DO COMENTÁRIO ---
                 if (logPertenceAoFornecedor)
                 {
                     string comentarioExtraido = "Sem detalhes adicionais.";
@@ -208,10 +235,7 @@ namespace CivicWatch.Api.Services
                     
                     if (log.Detalhes.Contains(chaveInicio))
                     {
-                        // Corta a string a partir do início do comentário
                         string temp = log.Detalhes.Substring(log.Detalhes.IndexOf(chaveInicio) + chaveInicio.Length);
-                        
-                        // Tenta encontrar onde o comentário termina (antes do contexto original, se houver)
                         int indiceFim = temp.IndexOf(". Contexto Original:");
                         
                         if (indiceFim > 0)
@@ -220,19 +244,15 @@ namespace CivicWatch.Api.Services
                         }
                         else
                         {
-                            comentarioExtraido = temp; // Pega até o final se não tiver contexto
+                            comentarioExtraido = temp;
                         }
-                        
-                        // Limpa espaços em branco extras
                         comentarioExtraido = comentarioExtraido.Trim();
                     }
 
-                    // Formata a mensagem final exibindo a justificativa
                     reasons.Add($"Irregularidade mantida ({origemIdentificacao}). Justificativa do Auditor: {comentarioExtraido}");
                 }
             }
 
-            // Se não encontrou logs nem sanções, mas o status está False, mostra mensagem genérica
             if (!reasons.Any())
             {
                 reasons.Add("Motivo da inconformidade não detalhado (Status marcado como Risco manualmente ou por simulação).");
@@ -252,7 +272,6 @@ namespace CivicWatch.Api.Services
 
             if (check != null)
             {
-                // Se o status calculado for diferente do atual, atualiza
                 if (check.EmConformidade != deveEstarEmConformidade)
                 {
                     check.EmConformidade = deveEstarEmConformidade;

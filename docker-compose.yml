@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # Serviço da API
+  civicwatch-api:
+    image: civicwatch-api
+    build:
+      context: ./CivicWatch.Api
+      dockerfile: Dockerfile
+    ports:
+      - "5000:80"
+      - "5001:443"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      # Nota: Aqui mantemos 'db,1433' porque dentro da rede Docker a porta interna continua sendo 1433
+      - ConnectionStrings__DefaultConnection=Server=db,1433;Database=CivicWatchDb;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=True;
+    depends_on:
+      - db
+    networks:
+      - civicwatch-network
+
+  # Serviço do Banco de Dados SQL Server
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: civicwatch-sql
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong@Password123
+    ports:
+      # CORREÇÃO: Mudamos a porta do Host (esquerda) para 1434
+      # A porta do Container (direita) permanece 1433
+      - "1434:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - civicwatch-network
+
+networks:
+  civicwatch-network:
+    driver: bridge
+
+volumes:
+  sqlserver_data:
